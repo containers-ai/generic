@@ -96,7 +96,7 @@
 - name: Replace repo info in 03 yaml if necessary
   replace: 
     dest="{{ yaml_3_name.files[0].path }}" 
-    regexp="quay.io/federatorai"
+    regexp="quay.io/fedaigeneric"
     replace="{{ image_url_prefix }}"
   when: (enable_private_repo == "y") and (image_url_prefix != "")
 
