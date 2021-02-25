@@ -5,7 +5,7 @@ metadata:
   namespace: federatorai
 spec:
   keycode:
-    codeNumber: T22YT-J5IKY-MVE7Q-XPZ4I-4YXPR-ASHDQ
+    codeNumber: UGTLQ-62NZU-P4HAX-XLMNU-P2UHP-UEDZA
   selfDriving: false             ## to enable resource self-orchestration of the deployed Alameda components
                                  ## it is recommended NOT to use ephemeral data storage for Alameda influxdb component when self-Driving is enabled
   enableExecution: true
