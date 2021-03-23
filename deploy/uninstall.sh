@@ -204,9 +204,31 @@ if [ "$offline_mode" = "y" ]; then
     done
     cd - > /dev/null
 else
-    file_folder="/tmp/uninstall-op"
-    rm -rf $file_folder
+    script_located_path=$(dirname $(readlink -f "$0"))
+    if [ "$FEDERATORAI_FILE_PATH" = "" ]; then
+        if [[ $script_located_path =~ .*/federatorai/repo/.* ]]; then
+            save_path="$(dirname "$(dirname "$(dirname "$(realpath $script_located_path)")")")"
+        else
+            # Ask for input
+            default="/opt"
+            read -r -p "$(tput setaf 2)Please enter the path of Federator.ai uninstallation directory [default: $default]: $(tput sgr 0) " save_path </dev/tty
+            save_path=${save_path:-$default}
+            save_path=$(echo "$save_path" | tr '[:upper:]' '[:lower:]')
+            save_path="$save_path/federatorai"
+        fi
+    else
+        save_path="$FEDERATORAI_FILE_PATH"
+    fi
+
+    file_folder="$save_path/uninstallation"
+    if [ -d "$file_folder" ]; then
+        rm -rf $file_folder
+    fi
     mkdir -p $file_folder
+    if [ ! -d "$file_folder" ]; then
+        echo -e "\n$(tput setaf 1)Error! Failed to create folder to save Federator.ai uninstallation files.$(tput sgr 0)"
+        exit 3
+    fi
     current_location=`pwd`
     cd $file_folder
 
@@ -215,7 +237,7 @@ else
         # init variables
         tag_number=""
 
-        read -r -p "$(tput setaf 2)Please input your Federator.ai Operator tag:$(tput sgr 0) " tag_number </dev/tty
+        read -r -p "$(tput setaf 2)Please enter your Federator.ai Operator tag:$(tput sgr 0) " tag_number </dev/tty
 
         echo -e "\n----------------------------------------"
         echo "Your tag number = $tag_number"

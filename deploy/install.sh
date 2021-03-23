@@ -53,6 +53,15 @@ pods_ready()
 
 leave_prog()
 {
+    # Clean up
+    if [ -d "$tgz_folder_name" ]; then
+        rm -rf $tgz_folder_name
+    fi
+
+    if [ -f "$tgz_name" ]; then
+        rm -f $tgz_name
+    fi
+
     echo -e "\n$(tput setaf 5)Downloaded YAML files are located under $file_folder $(tput sgr 0)"
     cd $current_location > /dev/null
 }
@@ -371,9 +380,9 @@ setup_data_adapter_secret()
         modified="y"
         while [ "$input_api_key" = "" ] || [ "$input_app_key" = "" ]
         do
-            read -r -p "$(tput setaf 2)Please input Datadog API key: $(tput sgr 0)" input_api_key </dev/tty
+            read -r -p "$(tput setaf 2)Please enter Datadog API key: $(tput sgr 0)" input_api_key </dev/tty
             input_api_key=`echo -n "$input_api_key" | base64`
-            read -r -p "$(tput setaf 2)Please input Datadog Application key: $(tput sgr 0)" input_app_key </dev/tty
+            read -r -p "$(tput setaf 2)Please enter Datadog Application key: $(tput sgr 0)" input_app_key </dev/tty
             input_app_key=`echo -n "$input_app_key" | base64`
         done
     else
@@ -389,12 +398,12 @@ setup_data_adapter_secret()
             while [ "$input_api_key" = "" ] || [ "$input_app_key" = "" ]
             do
                 default="$secret_api_key"
-                read -r -p "$(tput setaf 2)Please input Datadog API key [current: $default]: $(tput sgr 0)" input_api_key </dev/tty
+                read -r -p "$(tput setaf 2)Please enter Datadog API key [current: $default]: $(tput sgr 0)" input_api_key </dev/tty
                 input_api_key=${input_api_key:-$default}
                 input_api_key=`echo -n "$input_api_key" | base64`
 
                 default="$secret_app_key"
-                read -r -p "$(tput setaf 2)Please input Datadog Application key [current: $default]: $(tput sgr 0)" input_app_key </dev/tty
+                read -r -p "$(tput setaf 2)Please enter Datadog Application key [current: $default]: $(tput sgr 0)" input_app_key </dev/tty
                 input_app_key=${input_app_key:-$default}
                 input_app_key=`echo -n "$input_app_key" | base64`
             done
@@ -577,10 +586,7 @@ download_cr_files()
 
     for file_name in "${cr_files[@]}"
     do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/example/${file_name} -O; then
-            echo -e "\n$(tput setaf 1)Abort, download $file_name sample file failed!!!$(tput sgr 0)"
-            exit 3
-        fi
+        cp $tgz_folder_name/deploy/example/$file_name .
     done
 }
 
@@ -593,10 +599,7 @@ download_alamedascaler_files()
 
     for pool in "${src_pool[@]}"
     do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/example/${pool}/${alamedascaler_filename} -O; then
-            echo -e "\n$(tput setaf 1)Abort, download $alamedascaler_filename sample file from $pool folder failed!!!$(tput sgr 0)"
-            exit 3
-        fi
+        cp $tgz_folder_name/deploy/example/$pool/$alamedascaler_filename .
         if [ "$pool" = "kafka" ]; then
             mv $alamedascaler_filename alamedascaler_kafka.yaml
         elif [ "$pool" = "nginx" ]; then
@@ -610,7 +613,7 @@ download_alamedascaler_files()
 backup_configuration()
 {
     script_name="backup-restore.sh"
-    backup_folder="/tmp/configuration_backup"
+    backup_folder="$save_path/configuration_backup"
     default="y"
     read -r -p "$(tput setaf 2)Do you want to backup your configuration before upgrading Federator.ai? [default: $default]: $(tput sgr 0)" do_backup </dev/tty
     do_backup=${do_backup:-$default}
@@ -633,7 +636,7 @@ backup_configuration()
         fi
 
         default="$backup_folder"
-        read -r -p "$(tput setaf 2)Please input path for storing backup configuration: [default: $default] $(tput sgr 0)" backup_path </dev/tty
+        read -r -p "$(tput setaf 2)Please enter the path for storing backup configuration: [default: $default] $(tput sgr 0)" backup_path </dev/tty
         backup_path=${backup_path:-$default}
         backup_path=$(echo "$backup_path" | tr '[:upper:]' '[:lower:]')
         backup_folder=$backup_path
@@ -740,6 +743,7 @@ done
 #[ "${e_arg}" = "" ] && silent_mode_disabled="y"
 #[ "${p_arg}" = "" ] && silent_mode_disabled="y"
 [ "${s_arg}" = "" ] && silent_mode_disabled="y"
+[ "${FEDERATORAI_FILE_PATH}" = "" ] && silent_mode_disabled="y"
 [ "${s_arg}" = "persistent" ] && [ "${l_arg}" = "" ] && silent_mode_disabled="y"
 [ "${s_arg}" = "persistent" ] && [ "${d_arg}" = "" ] && silent_mode_disabled="y"
 [ "${s_arg}" = "persistent" ] && [ "${c_arg}" = "" ] && silent_mode_disabled="y"
@@ -842,6 +846,34 @@ if [ "$previous_alameda_namespace" != "" ];then
     fi
 fi
 
+script_located_path=$(dirname $(readlink -f "$0"))
+if [ "$FEDERATORAI_FILE_PATH" = "" ]; then
+    # Try to find existing path
+    if [[ $script_located_path =~ .*/federatorai/repo/.* ]]; then
+        save_path="$(dirname "$(dirname "$(dirname "$(realpath $script_located_path)")")")"
+    else
+        # Ask for input
+        default="/opt"
+        read -r -p "$(tput setaf 2)Please enter the path of Federator.ai installation directory [default: $default]: $(tput sgr 0) " save_path </dev/tty
+        save_path=${save_path:-$default}
+        save_path=$(echo "$save_path" | tr '[:upper:]' '[:lower:]')
+        save_path="$save_path/federatorai"
+    fi
+else
+    save_path="$FEDERATORAI_FILE_PATH"
+fi
+
+file_folder="$save_path/installation"
+if [ -d "$file_folder" ]; then
+    rm -rf $file_folder
+fi
+
+mkdir -p $file_folder
+if [ ! -d "$file_folder" ]; then
+    echo -e "\n$(tput setaf 1)Error! Failed to create folder to save Federator.ai installation files.$(tput sgr 0)"
+    exit 3
+fi
+
 if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
     if [ "$silent_mode_disabled" = "y" ];then
 
@@ -852,7 +884,7 @@ if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
             # Check if tag number is specified
             if [ "$specified_tag_number" = "" ]; then
                 tag_number=""
-                read -r -p "$(tput setaf 2)Please input Federator.ai Operator tag:$(tput sgr 0) " tag_number </dev/tty
+                read -r -p "$(tput setaf 2)Please enter Federator.ai Operator tag:$(tput sgr 0) " tag_number </dev/tty
             else
                 tag_number=$specified_tag_number
             fi
@@ -883,6 +915,7 @@ if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
         echo -e "\n----------------------------------------"
         echo "tag_number=$specified_tag_number"
         echo "install_namespace=$install_namespace"
+        echo "save_path=$save_path"
         #echo "enable_execution=$enable_execution"
         #echo "prometheus_address=$prometheus_address"
         echo "storage_type=$storage_type"
@@ -909,11 +942,8 @@ else
     fi
 fi
 
-file_folder="/tmp/install-op"
 [ "$max_wait_pods_ready_time" = "" ] && max_wait_pods_ready_time=900  # maximum wait time for pods become ready
 
-rm -rf $file_folder
-mkdir -p $file_folder
 current_location=`pwd`
 script_located_path=$(dirname $(readlink -f "$0"))
 cd $file_folder
@@ -940,23 +970,33 @@ if [ "$need_upgrade" = "y" ];then
 fi
 
 if [ "$offline_mode_enabled" != "y" ]; then
-    operator_files=`curl --silent https://api.github.com/repos/containers-ai/generic/contents/deploy/upstream?ref=${tag_number} 2>&1|grep "\"name\":"|cut -d ':' -f2|cut -d '"' -f2`
-    if [ "$operator_files" = "" ]; then
-        echo -e "\n$(tput setaf 1)Abort, download operator file list failed!!!$(tput sgr 0)"
+    echo -e "\n$(tput setaf 2)Downloading ${tag_number} tgz file ...$(tput sgr 0)"
+    tgz_name="${tag_number}.tar.gz"
+    if ! curl -sL --fail https://github.com/containers-ai/generic/archive/${tgz_name} -O; then
+        echo -e "\n$(tput setaf 1)Error, download file $tgz_name failed!!!$(tput sgr 0)"
         echo "Please check tag name and network"
         exit 1
     fi
 
-    for file in `echo $operator_files`
-    do
-        echo "Downloading file $file ..."
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/upstream/${file} -O; then
-            echo -e "\n$(tput setaf 1)Abort, download file failed!!!$(tput sgr 0)"
-            echo "Please check tag name and network"
+    tar -zxf $tgz_name
+    if [ "$?" != "0" ];then
+        echo -e "\n$(tput setaf 1)Error, untar $tgz_name file failed!!!$(tput sgr 0)"
+        exit 3
+    fi
+
+    tgz_folder_name=$(tar -tzf $tgz_name | head -1 | cut -f1 -d"/")
+    if [ "$tgz_folder_name" = "" ]; then
+        echo -e "\n$(tput setaf 1)Error, failed to get extracted directory name.$(tput sgr 0)"
+        exit 3
+    fi
+
+    cp $tgz_folder_name/deploy/upstream/* .
+
+    if [[ "`ls [00-11]*.yaml 2>/dev/null|wc -l`" -lt "12" ]]; then
+        echo -e "\n$(tput setaf 1)Abort, operator files number is less than 12.$(tput sgr 0)"
             exit 1
         fi
         echo "Done"
-    done
 else
     # Offline Mode
     # Copy Federator.ai operator 00-11 yamls
@@ -1070,11 +1110,8 @@ fi
 if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
     alamedaservice_example="alamedaservice_sample.yaml"
     if [ "$offline_mode_enabled" != "y" ]; then
-        echo -e "\nDownloading Federator.ai CR sample files ..."
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/example/${alamedaservice_example} -O; then
-            echo -e "\n$(tput setaf 1)Abort, download alamedaservice sample file failed!!!$(tput sgr 0)"
-            exit 2
-        fi
+        echo -e "\nDownloading Federator.ai alamedaservice sample file ..."
+        cp $tgz_folder_name/deploy/example/$alamedaservice_example .
         download_cr_files
         echo "Done"
         echo -e "\nDownloading Federator.ai alamedascaler sample files ..."

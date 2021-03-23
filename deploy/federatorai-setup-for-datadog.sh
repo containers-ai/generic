@@ -361,8 +361,8 @@ get_datadog_key()
         key_modified="y"
         while [ "$datadogAPIKey" = "" ] || [ "$datadogApplicationKey" = "" ]
         do
-            read -r -p "$(tput setaf 6)Please input Datadog API key: $(tput sgr 0)" datadogAPIKey </dev/tty
-            read -r -p "$(tput setaf 6)Please input Datadog Application key: $(tput sgr 0)" datadogApplicationKey </dev/tty
+            read -r -p "$(tput setaf 6)Please enter Datadog API key: $(tput sgr 0)" datadogAPIKey </dev/tty
+            read -r -p "$(tput setaf 6)Please enter Datadog Application key: $(tput sgr 0)" datadogApplicationKey </dev/tty
         done
     else
         while [ "$reconfigure_action" != "y" ] && [ "$reconfigure_action" != "n" ]
@@ -376,10 +376,10 @@ get_datadog_key()
             key_modified="y"
             while [ "$datadogAPIKey" = "" ] || [ "$datadogApplicationKey" = "" ]
             do
-                read -r -p "$(tput setaf 6)Please input Datadog API key [current: $secret_api_key]: $(tput sgr 0)" datadogAPIKey </dev/tty
+                read -r -p "$(tput setaf 6)Please enter Datadog API key [current: $secret_api_key]: $(tput sgr 0)" datadogAPIKey </dev/tty
                 datadogAPIKey=${datadogAPIKey:-$secret_api_key}
 
-                read -r -p "$(tput setaf 6)Please input Datadog Application key [current: $secret_app_key]: $(tput sgr 0)" datadogApplicationKey </dev/tty
+                read -r -p "$(tput setaf 6)Please enter Datadog Application key [current: $secret_app_key]: $(tput sgr 0)" datadogApplicationKey </dev/tty
                 datadogApplicationKey=${datadogApplicationKey:-$secret_app_key}
             done
         fi
@@ -921,9 +921,31 @@ done
 
 [ "$max_wait_pods_ready_time" = "" ] && max_wait_pods_ready_time=1500  # maximum wait time for pods become ready
 
-file_folder="./config_result"
-current_location=`pwd`
+script_located_path=$(dirname $(readlink -f "$0"))
+if [ "$FEDERATORAI_FILE_PATH" = "" ]; then
+    if [[ $script_located_path =~ .*/federatorai/repo/.* ]]; then
+        save_path="$(dirname "$(dirname "$(dirname "$(realpath $script_located_path)")")")"
+    else
+        # Ask for input
+        default="/opt"
+        read -r -p "$(tput setaf 2)Please enter the path of Federator.ai federatorai-setup-for-datadog directory [default: $default]: $(tput sgr 0) " save_path </dev/tty
+        save_path=${save_path:-$default}
+        save_path=$(echo "$save_path" | tr '[:upper:]' '[:lower:]')
+        save_path="$save_path/federatorai"
+    fi
+else
+    save_path="$FEDERATORAI_FILE_PATH"
+fi
+
+file_folder="$save_path/setup-for-datadog"
+if [ -d "$file_folder" ]; then
+    rm -rf $file_folder
+fi
 mkdir -p $file_folder
+if [ ! -d "$file_folder" ]; then
+    echo -e "\n$(tput setaf 1)Error! Failed to create folder to save Federator.ai federatorai-setup-for-datadog files.$(tput sgr 0)"
+    exit 3
+fi
 
 if [ "$openshift_minor_version" != "" ]; then
     # OpenShift

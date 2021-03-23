@@ -8,6 +8,11 @@ metadata:
     app: Federator.ai
 spec:
   replicas: 1
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
   selector:
     matchLabels:
       name: federatorai-operator
@@ -89,4 +94,4 @@ spec:
         - name: cert
           secret:
             defaultMode: 420
-            secretName: federatorai-operator-admission
+            secretName: federatorai-operator-service-cert

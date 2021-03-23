@@ -6,7 +6,6 @@ metadata:
 spec:
   keycode:
     codeNumber: UGTLQ-62NZU-P4HAX-XLMNU-P2UHP-UEDZA
-  enableExecution: true
   version: latest               ## for Federator.ai components
   imageLocation: quay.io/fedaigeneric
   storages:                     ## see following details for where it is used in each component
