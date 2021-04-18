@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+#
+# Need bash to run this script
+if [ "${BASH_VERSION}" = "" ]; then
+    /bin/echo -e "\n$(tput setaf 1)Error! You need to use bash to run this script.$(tput sgr 0)\n"
+    exit 1
+fi
 
 show_usage()
 {
@@ -33,10 +39,14 @@ get_build_tag()
     fi
     while [ "$pass" != "y" ]
     do
-        [ "${tag_number}" = "" ] && read -r -p "$(tput setaf 2)Please input Federator.ai version tag (e.g., v4.4.0): $(tput sgr 0) " tag_number </dev/tty
+        [ "${tag_number}" = "" ] && read -r -p "$(tput setaf 2)Please enter Federator.ai version tag (e.g., v4.4.0): $(tput sgr 0) " tag_number </dev/tty
         if [[ $tag_number =~ ^[v][[:digit:]]+\.[[:digit:]]+\.[0-9a-z\-]+$ ]]; then
             pass="y"
         fi
+        # Enable SKIP_TAG_NUMBER_CHECK=1 if tag_number prefix is 'dev-' for development build
+        if [[ $tag_number =~ ^dev- ]]; then SKIP_TAG_NUMBER_CHECK=1; fi
+        # Purposely ignore error of unofficial tag_number for development build
+        if [ "${SKIP_TAG_NUMBER_CHECK}" = "1" ]; then pass="y"; fi
         if [ "$pass" != "y" ]; then
             echo -e "\n$(tput setaf 1)Error! The version tag should follow the correct format (e.g., v4.2.755).$(tput sgr 0)"
             [ "${ALAMEDASERVICE_FILE_PATH}" != "" ] && exit 1
@@ -50,6 +60,8 @@ get_build_tag()
     tag_middle_digit=${full_tag##$tag_first_digit.}         # Delete first number and dot.
     tag_middle_digit=${tag_middle_digit%%.$tag_last_digit}  # Delete dot and last number.
     tag_first_digit=$(echo $tag_first_digit|cut -d 'v' -f2) # Delete v
+    # Purposely ignore error of unofficial tag_number for development build, start from v4.4
+    if [ "${SKIP_TAG_NUMBER_CHECK}" = "1" ]; then tag_first_digit="4"; tag_middle_digit="5"; fi
 
     if [ "$tag_first_digit" -le "4" ] && [ "$tag_middle_digit" -le "3" ]; then
         # <= 4.3
@@ -58,9 +70,26 @@ get_build_tag()
         exit 3
     fi
 
-    file_folder="/tmp/federatorai-scripts/${tag_number}"
-    rm -rf $file_folder
+    if [ "$tag_first_digit" -ge "4" ] && [ "$tag_middle_digit" -ge "5" ]; then
+        # >= 4.5
+        default="/opt"
+        read -r -p "$(tput setaf 2)Please enter the path of Federator.ai directory [default: $default]: $(tput sgr 0) " save_path </dev/tty
+        save_path=${save_path:-$default}
+        save_path=$(echo "$save_path" | tr '[:upper:]' '[:lower:]')
+        file_folder="$save_path/federatorai/repo/${tag_number}"
+    else
+        file_folder="/tmp/federatorai-scripts/${tag_number}"
+    fi
+
+    if [ -d "$file_folder" ]; then
+        rm -rf $file_folder
+    fi
     mkdir -p $file_folder
+    if [ ! -d "$file_folder" ]; then
+        echo -e "\n$(tput setaf 1)Error! Failed to create folder ($file_folder) to save Federator.ai files.$(tput sgr 0)"
+        exit 3
+    fi
+    save_path="$(dirname "$(dirname "$(realpath $file_folder)")")"
     cd $file_folder
 }
 
@@ -68,7 +97,7 @@ get_repo_url()
 {
     while [ "$repo_url" = "" ] # prevent 'enter' is pressed without input
     do
-        read -r -p "$(tput setaf 2)Please input private repository URL (e.g., repo.example.com/generic): $(tput sgr 0) " repo_url </dev/tty
+        read -r -p "$(tput setaf 2)Please enter the URL of private repository (e.g., repo.example.com/generic): $(tput sgr 0) " repo_url </dev/tty
         repo_url=$(echo "$repo_url" | tr '[:upper:]' '[:lower:]')
     done
 
@@ -131,7 +160,27 @@ done
 
 download_files()
 {
-    scriptarray=("install.sh" "email-notifier-setup.sh" "node-label-assignor.sh" "planning-util.sh" "preloader-util.sh" "prepare-private-repository.sh" "uninstall.sh")
+    echo -e "\n$(tput setaf 6)Downloading ${tag_number} tgz file ...$(tput sgr 0)"
+    tgz_name="${tag_number}.tar.gz"
+    if ! curl -sL --fail https://github.com/containers-ai/generic/archive/${tgz_name} -O; then
+        echo -e "\n$(tput setaf 1)Error, download file $tgz_name failed!!!$(tput sgr 0)"
+        echo "Please check tag name and network"
+        exit 1
+    fi
+
+    tar -zxf $tgz_name
+    if [ "$?" != "0" ];then
+        echo -e "\n$(tput setaf 1)Error, untar $tgz_name file failed!!!$(tput sgr 0)"
+        exit 3
+    fi
+
+    tgz_folder_name=$(tar -tzf $tgz_name | head -1 | cut -f1 -d"/")
+    if [ "$tgz_folder_name" = "" ]; then
+        echo -e "\n$(tput setaf 1)Error, failed to get extracted directory name.$(tput sgr 0)"
+        exit 3
+    fi
+
+    scriptarray=("install.sh" "email-notifier-setup.sh" "node-label-assignor.sh" "preloader-util.sh" "prepare-private-repository.sh" "uninstall.sh")
     if [ "$tag_first_digit" -ge "4" ] && [ "$tag_middle_digit" -ge "3" ]; then
         # >= 4.3
         scriptarray=("${scriptarray[@]}" "federatorai-setup-for-datadog.sh")
@@ -139,98 +188,56 @@ download_files()
 
     if [ "$tag_first_digit" -ge "4" ] && [ "$tag_middle_digit" -ge "4" ]; then
         # >= 4.4
-        scriptarray=("${scriptarray[@]}" "cluster-property-setup.sh")
+        scriptarray=("${scriptarray[@]}" "cluster-property-setup.sh" "backup-restore.sh")
+    fi
+
+    if [ "$tag_first_digit" -ge "4" ] && [ "$tag_middle_digit" -lt "5" ]; then
+        # < 4.5
+        scriptarray=("${scriptarray[@]}" "planning-util.sh")
     fi
 
     mkdir -p $scripts_folder
-    cd $scripts_folder
-    echo -e "\n$(tput setaf 6)Downloading scripts ...$(tput sgr 0)"
-    for file_name in "${scriptarray[@]}"
-    do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/${file_name} -O; then
-            echo -e "\n$(tput setaf 1)Abort, download file $file_name failed!!!$(tput sgr 0)"
-            echo "Please check tag name and network"
-            exit 1
-        fi
-    done
+
     # Download launcher itself.
+    cd $scripts_folder
     if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/master/deploy/federatorai-launcher.sh -O; then
         echo -e "\n$(tput setaf 1)Abort, download federatorai-launcher.sh failed!!!$(tput sgr 0)"
         echo "Please check network"
         exit 1
     fi
-
-    # Download Ansible folders.
-    ansible_folder_name="ansible_for_federatorai"
-    mkdir -p $ansible_folder_name
-
-    # Installer
-    ansible_install_file_lists=`curl --silent https://api.github.com/repos/containers-ai/generic/contents/deploy/${ansible_folder_name}?ref=${tag_number} 2>&1|grep "\"name\":"|cut -d ':' -f2|cut -d '"' -f2|grep -v "uninstaller"`
-    if [ "$ansible_install_file_lists" = "" ]; then
-        echo -e "\n$(tput setaf 3)Warning, download Federator.ai ansible install files list failed!!!$(tput sgr 0)"
-    fi
-
-    for file in `echo $ansible_install_file_lists`
-    do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/${ansible_folder_name}/${file} -o $ansible_folder_name/${file}; then
-            echo -e "\n$(tput setaf 3)Warning, download Federator.ai ansible install file \"${file}\" failed!!!$(tput sgr 0)"
-        fi
-    done
-
-    # Uninstaller
-    mkdir -p $ansible_folder_name/uninstaller
-    ansible_uninstall_file_lists=`curl --silent https://api.github.com/repos/containers-ai/generic/contents/deploy/${ansible_folder_name}/uninstaller?ref=${tag_number} 2>&1|grep "\"name\":"|cut -d ':' -f2|cut -d '"' -f2`
-    if [ "$ansible_uninstall_file_lists" = "" ]; then
-        echo -e "\n$(tput setaf 3)Warning, download Federator.ai ansible uninstall files list failed!!!$(tput sgr 0)"
-    fi
-
-    for file in `echo $ansible_uninstall_file_lists`
-    do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/${ansible_folder_name}/uninstaller/${file} -o $ansible_folder_name/uninstaller/${file}; then
-            echo -e "\n$(tput setaf 3)Warning, download Federator.ai ansible uninstall file \"${file}\" failed!!!$(tput sgr 0)"
-        fi
-    done
-
-    # Download preloader ab runnder folder
-    ab_folder_name="preloader_ab_runner"
-    mkdir -p $ab_folder_name
-
-    ab_file_lists=`curl --silent https://api.github.com/repos/containers-ai/generic/contents/deploy/${ab_folder_name}?ref=${tag_number} 2>&1|grep "\"name\":"|cut -d ':' -f2|cut -d '"' -f2`
-    if [ "$ab_file_lists" = "" ]; then
-        echo -e "\n$(tput setaf 3)Warning, download Federator.ai preloader ab files list failed!!!$(tput sgr 0)"
-    fi
-
-    for file in `echo $ab_file_lists`
-    do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/${ab_folder_name}/${file} -o $ab_folder_name/${file}; then
-            echo -e "\n$(tput setaf 3)Warning, download Federator.ai preloader ab file \"${file}\" failed!!!$(tput sgr 0)"
-        fi
-    done
-
     cd - > /dev/null
+
+    # Copy all scripts.
+    for file_name in "${scriptarray[@]}"
+    do
+        cp $tgz_folder_name/deploy/$file_name $scripts_folder
+    done
+
+    # Copy Ansible folders.
+    ansible_folder_name="ansible_for_federatorai"
+    cp -r $tgz_folder_name/deploy/$ansible_folder_name $scripts_folder
+
+    # Copy preloader ab runnder folder
+    ab_folder_name="preloader_ab_runner"
+    cp -r $tgz_folder_name/deploy/$ab_folder_name $scripts_folder
+
+    if [ "$tag_first_digit" -ge "4" ] && [ "$tag_middle_digit" -ge "5" ]; then
+        # >= 4.5
+        # Copy planning util folder
+        planning_folder_name="planning_util"
+        cp -r $tgz_folder_name/deploy/$planning_folder_name $scripts_folder
+    fi
 
     alamedaservice_example="alamedaservice_sample.yaml"
     yamlarray=( "alamedadetection.yaml" "alamedanotificationchannel.yaml" "alamedanotificationtopic.yaml" )
-    # if [ "$tag_first_digit" -eq "4" ] && [ "$tag_middle_digit" -eq "2" ]; then
-    #     yamlarray=("${yamlarray[@]}" "alamedascaler.yaml")
-    # fi
 
+    # Copy yamls
     mkdir -p $yamls_folder
-    cd $yamls_folder
-    echo -e "\n$(tput setaf 6)Downloading Federator.ai CR yamls ...$(tput sgr 0)"
-    if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/example/${alamedaservice_example} -O; then
-        echo -e "\n$(tput setaf 1)Abort, download alamedaservice sample yaml file failed!!!$(tput sgr 0)"
-        echo "Please check tag name and network"
-        exit 2
-    fi
+    cp $tgz_folder_name/deploy/example/$alamedaservice_example $yamls_folder
 
     for file_name in "${yamlarray[@]}"
     do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/example/${file_name} -O; then
-            echo -e "\n$(tput setaf 1)Abort, download $file_name file failed!!!$(tput sgr 0)"
-            echo "Please check tag name and network"
-            exit 3
-        fi
+        cp $tgz_folder_name/deploy/example/$file_name $yamls_folder
     done
 
     if [ "$tag_first_digit" -ge "4" ] && [ "$tag_middle_digit" -ge "3" ]; then
@@ -240,41 +247,24 @@ download_files()
 
         for pool in "${src_pool[@]}"
         do
-            if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/example/${pool}/${alamedascaler_filename} -O; then
-                echo -e "\n$(tput setaf 1)Abort, download $alamedascaler_filename sample file from $pool folder failed!!!$(tput sgr 0)"
-                exit 3
-            fi
+            cp $tgz_folder_name/deploy/example/$pool/$alamedascaler_filename $yamls_folder
             if [ "$pool" = "kafka" ]; then
-                mv $alamedascaler_filename alamedascaler_kafka.yaml
+                mv $yamls_folder/$alamedascaler_filename $yamls_folder/alamedascaler_kafka.yaml
             elif [ "$pool" = "nginx" ]; then
-                mv $alamedascaler_filename alamedascaler_nginx.yaml
+                mv $yamls_folder/$alamedascaler_filename $yamls_folder/alamedascaler_nginx.yaml
             else
-                mv $alamedascaler_filename alamedascaler_generic.yaml
+                mv $yamls_folder/$alamedascaler_filename $yamls_folder/alamedascaler_generic.yaml
             fi
         done
     fi
-    cd - > /dev/null
 
+    # Copy operator yamls
     mkdir -p $operator_folder
-    cd $operator_folder
-    echo -e "\n$(tput setaf 6)Downloading Federator.ai operator yamls ...$(tput sgr 0)"
-    operator_lists=`curl --silent https://api.github.com/repos/containers-ai/generic/contents/deploy/upstream?ref=${tag_number} 2>&1|grep "\"name\":"|cut -d ':' -f2|cut -d '"' -f2`
-    if [ "$operator_lists" = "" ]; then
-        echo -e "\n$(tput setaf 1)Abort, download Federator.ai operator yaml list failed!!!$(tput sgr 0)"
-        echo "Please check tag name and network"
-        exit 1
-    fi
+    cp $tgz_folder_name/deploy/upstream/* $operator_folder
 
-    for file in `echo $operator_lists`
-    do
-        if ! curl -sL --fail https://raw.githubusercontent.com/containers-ai/generic/${tag_number}/deploy/upstream/${file} -O; then
-            echo -e "\n$(tput setaf 1)Abort, download file failed!!!$(tput sgr 0)"
-            echo "Please check tag name and network"
-            exit 1
-        fi
-    done
-    cd - > /dev/null
-
+    # Clean up
+    rm -rf $tgz_folder_name
+    rm -f $tgz_name
     echo "Done"
 }
 
@@ -321,6 +311,10 @@ go_interactive()
 
     if [ "$run_installation" = "y" ]; then
         echo -e "\n$(tput setaf 6)Executing install.sh ...$(tput sgr 0)"
+        # Pass files path to install.sh
+        if [ "$save_path" != "" ]; then
+            export FEDERATORAI_FILE_PATH=$save_path
+        fi
         bash $scripts_folder/install.sh -t $tag_number
     fi
 }
