@@ -87,7 +87,7 @@ get_build_tag()
         echo -e "\n$(tput setaf 3)curl https://raw.githubusercontent.com/containers-ai/federatorai-operator/master/deploy/federatorai-launcher.sh |bash $(tput sgr 0)"
         exit 3
     fi
-
+    echo -e "$(tput setaf 3)Federator.ai version = $tag_number$(tput sgr 0)"
     if [ "$tag_first_digit" -ge "4" ] && [ "$tag_middle_digit" -ge "5" ]; then
         # >= 4.5
         default="/opt"
