@@ -25,11 +25,6 @@
 #   -x followed by expose_service (y or n)
 #################################################################################################################
 
-is_pod_ready()
-{
-  [[ "$(kubectl get po "$1" -n "$2" -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}')" == 'True' ]]
-}
-
 pods_ready()
 {
   [[ "$#" == 0 ]] && return 0
@@ -37,7 +32,7 @@ pods_ready()
   namespace="$1"
 
   kubectl get pod -n $namespace \
-    -o=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.status.phase}{"\t"}{.status.reason}{"\n"}{end}' \
+    '-o=go-template={{range .items}}{{.metadata.name}}{{"\t"}}{{range .status.conditions}}{{if eq .type "Ready"}}{{.status}}{{"\t"}}{{end}}{{end}}{{.status.phase}}{{"\t"}}{{if .status.reason}}{{.status.reason}}{{end}}{{"\n"}}{{end}}' \
       | while read name status phase reason _junk; do
           if [ "$status" != "True" ]; then
             msg="Waiting for pod $name in namespace $namespace to be ready."
@@ -201,7 +196,7 @@ wait_until_single_pod_become_ready()
                 return 0
             fi
         done <<< "$(kubectl get pod -n $namespace \
-        -o=jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.status.phase}{"\t"}{.spec.containers[*].image}{"\t"}{.status.reason}{"\n"}{end}' \
+        '-o=go-template={{range .items}}{{.metadata.name}}{{"\t"}}{{range .status.conditions}}{{if eq .type "Ready"}}{{.status}}{{"\t"}}{{end}}{{end}}{{.status.phase}}{{"\t"}}{{range .spec.containers}}{{.image}}{{end}}{{"\t"}}{{if .status.reason}}{{.status.reason}}{{end}}{{"\n"}}{{end}}' \
         | grep "$pod_name" |grep "$tag_number")"
 
         sleep "$interval"
@@ -794,8 +789,8 @@ if [ "$offline_mode_enabled" != "y" ]; then
     fi
 fi
 
-previous_alameda_namespace="`kubectl get pods --all-namespaces |grep "alameda-ai-"|awk '{print $1}'|head -1`"
-previous_tag="`kubectl get pods -n $previous_alameda_namespace -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[*].image 2>/dev/null| grep datahub | head -1 |awk -F'/' '{print $NF}'| cut -d ':' -f2`"
+previous_alameda_namespace="`kubectl get alamedaservice --all-namespaces 2>/dev/null|tail -1|awk '{print $1}'`"
+previous_tag="`kubectl get alamedaservices -n $previous_alameda_namespace -o custom-columns=VERSION:.spec.version 2>/dev/null|grep -v VERSION|head -1`"
 previous_alamedaservice="`kubectl get alamedaservice -n $previous_alameda_namespace -o custom-columns=NAME:.metadata.name 2>/dev/null|grep -v NAME|head -1`"
 
 # Read alamedaservice file option only work in fresh installation.
@@ -990,13 +985,22 @@ if [ "$offline_mode_enabled" != "y" ]; then
         exit 3
     fi
 
-    cp $tgz_folder_name/deploy/upstream/* .
+    default_minimal_k8s_version_minor="16"
+    k8s_version=$(kubectl version --short | grep -Po 'Server Version: v\K[0-9]+.[0-9]+')
+    k8s_version_major=$(echo $k8s_version | cut -d. -f1)
+    k8s_version_minor=$(echo $k8s_version | cut -d. -f2)
+    if [ "$k8s_version_major" = "1" ] && [ $k8s_version_minor -gt 10 ] && \
+        [ $k8s_version_minor -lt $default_minimal_k8s_version_minor ]; then
+        cp $tgz_folder_name/deploy/upstream-1.15/* .
+    else
+        cp $tgz_folder_name/deploy/upstream/* .
+    fi
 
     if [[ "`ls [00-11]*.yaml 2>/dev/null|wc -l`" -lt "12" ]]; then
         echo -e "\n$(tput setaf 1)Abort, operator files number is less than 12.$(tput sgr 0)"
-            exit 1
-        fi
-        echo "Done"
+        exit 1
+    fi
+    echo "Done"
 else
     # Offline Mode
     # Copy Federator.ai operator 00-11 yamls
@@ -1065,37 +1069,39 @@ if [ "$need_upgrade" = "y" ];then
 
 fi
 
-if [ "$need_upgrade" = "y" ];then
-    for yaml_fn in `ls [0-9]*.yaml | sort -n`; do
-        case "$yaml_fn" in
-        *03-*)
-          later_yaml="$yaml_fn"
-          echo "Delay applying $yaml_fn"
-          continue
-          ;;
-        esac
-        echo "Applying ${yaml_fn}..."
-        kubectl apply -f ${yaml_fn}
-        if [ "$?" != "0" ]; then
-            echo -e "\n$(tput setaf 1)Error in applying yaml file ${yaml_fn}.$(tput sgr 0)"
-            exit 8
-        fi
-    done
-    echo "Applying ${later_yaml}..."
-    kubectl apply -f ${later_yaml}
+for yaml_fn in `ls [0-9]*.yaml | sort -n`; do
+    case "$yaml_fn" in
+    *03-*)
+        later_yaml="$yaml_fn"
+        echo "Delay applying $yaml_fn"
+        continue
+        ;;
+    esac
+    echo "Applying ${yaml_fn}..."
+    kubectl apply -f ${yaml_fn}
     if [ "$?" != "0" ]; then
-        echo -e "\n$(tput setaf 1)Error in applying yaml file ${later_yaml}.$(tput sgr 0)"
+        echo -e "\n$(tput setaf 1)Error in applying yaml file ${yaml_fn}.$(tput sgr 0)"
         exit 8
     fi
-else
-    for yaml_fn in `ls [0-9]*.yaml | sort -n`; do
-        echo "Applying ${yaml_fn}..."
-        kubectl apply -f ${yaml_fn}
-        if [ "$?" != "0" ]; then
-            echo -e "\n$(tput setaf 1)Error in applying yaml file ${yaml_fn}.$(tput sgr 0)"
-            exit 8
+done
+
+if [ "$need_upgrade" != "y" ];then
+    # In need_upgrade = y case, deployment of federatorai-operator has been deleted before applying yamls
+    # Delete federatorai-operator pod with same tag_number as 03 yaml to prevent certificate erased issue.
+    while read _namespace _podname _junk; do
+        pod_tag=$(kubectl -n ${_namespace} exec ${_podname} 2>/dev/null -- cat /opt/alameda/federatorai-operator/etc/version.txt |grep TAG|cut -d'=' -f2)
+        if [ "$tag_number" = "$pod_tag" ]; then
+            echo "Deleting pod (${_podname}) before applying ${later_yaml}..."
+            kubectl -n ${_namespace} delete pod ${_podname} >/dev/null 2>&1
         fi
-    done
+    done <<< "$(kubectl get pods --all-namespaces |grep ' federatorai-operator-')"
+fi
+
+echo "Applying ${later_yaml}..."
+kubectl apply -f ${later_yaml}
+if [ "$?" != "0" ]; then
+    echo -e "\n$(tput setaf 1)Error in applying yaml file ${later_yaml}.$(tput sgr 0)"
+    exit 8
 fi
 
 if [ "$need_upgrade" != "y" ];then
@@ -1266,11 +1272,6 @@ __EOF__
 
 __EOF__
         fi
-
-        # enableGPU: false
-        cat >> ${alamedaservice_example} << __EOF__
-  enableGPU: false
-__EOF__
 
         if [ "$openshift_minor_version" = "" ]; then #k8s
             if [ "$expose_service" = "y" ] || [ "$expose_service" = "Y" ]; then

@@ -27,7 +27,7 @@ spec:
       serviceAccountName: federatorai-operator
       initContainers:
         - name: upgrader
-          image: quay.io/fedaigeneric/federatorai-operator-ubi:latest
+          image: quay.io/prophetstor/federatorai-operator-ubi:latest
           command:
           - federatorai-operator
           args:
@@ -56,7 +56,7 @@ spec:
       containers:
         - name: federatorai-operator
           # Replace this with the built image name
-          image: quay.io/fedaigeneric/federatorai-operator-ubi:latest
+          image: quay.io/prophetstor/federatorai-operator-ubi:latest
           imagePullPolicy: IfNotPresent
           command:
           - federatorai-operator
