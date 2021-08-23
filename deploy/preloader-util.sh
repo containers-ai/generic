@@ -1186,22 +1186,34 @@ __EOF__
     # rest url: http://127.0.0.1:5055/apis/v1/configs/updatenamespacestate
     # request body: {"data": { "cluster_name": "my-k8s-1", "name": "kube-system", "state": "monitoring"}}
     json_data="{\"data\": { \"cluster_name\": \"${cluster_name}\", \"name\": \"${nginx_ns}\", \"state\": \"monitoring\"}}"
-    rest_pod_name="`kubectl get pods -n ${install_namespace} | grep "federatorai-rest-" | awk '{print $1}' | head -1`"
-    (kubectl -n ${install_namespace} exec -it ${rest_pod_name} -- \
-        curl -s -v -X PUT -H "Content-Type: application/json" \
-            -u "${auth_username}:${auth_password}" \
-            -d "${json_data}" \
-            http://127.0.0.1:5055/apis/v1/configs/updatenamespacestate \
-            2>&1) > /tmp/.preloader-running.$$
-    grep 'HTTP/1.1 200 OK' /tmp/.preloader-running.$$ > /dev/null
-    if [ "$?" != "0" ]; then
-        cat /tmp/.preloader-running.$$
+    # Retry maximum 20*15s=300s because data-adapter took time to add namespace into alameda_cluster_status.namespace measurement
+    for i in `seq 1 20`; do
+        rest_pod_name="`kubectl get pods -n ${install_namespace} | grep "federatorai-rest-" | awk '{print $1}' | head -1`"
+        (kubectl -n ${install_namespace} exec -it ${rest_pod_name} -- \
+            curl -s -v -X PUT -H "Content-Type: application/json" \
+                -u "${auth_username}:${auth_password}" \
+                -d "${json_data}" \
+                http://127.0.0.1:5055/apis/v1/configs/updatenamespacestate \
+                2>&1) > /tmp/.preloader-running.$$
         cat /tmp/.preloader-running.$$ >> $debug_log
+        # Wait until exists in alameda_cluster_status.namespace
+        grep "Namespace .*. in cluster .*. is not found" /tmp/.preloader-running.$$ > /dev/null
+        if [ "$?" = "0" ]; then
+            echo "Waiting for namespace ${nginx_ns} become ready in database"
+            sleep 15
+            continue
+        fi
+        #
+        grep 'HTTP/1.1 200 OK' /tmp/.preloader-running.$$ > /dev/null
+        if [ "$?" = "0" ]; then
+            break
+        fi
+        cat /tmp/.preloader-running.$$
         echo "Error in setting 'monitoring' state." >> $debug_log
         echo "Error in setting 'monitoring' state."
-    fi
+        sleep 5
+    done
     rm -f /tmp/.preloader-running.$$
-
     echo "Done"
     end=`date +%s`
     duration=$((end-start))
@@ -1394,6 +1406,8 @@ enable_preloader_in_alamedaservice()
     if [ "$current_preloader_pod_name" != "" ]; then
         echo -e "\n$(tput setaf 6)Skip preloader installation due to preloader pod exists.$(tput sgr 0)"
         echo -e "Deleting preloader pod to renew the pod state..."
+        # Delete previous agent.log to prevent pump status checking error.
+        kubectl -n $install_namespace exec $current_preloader_pod_name -- rm -f /var/log/alameda/agent.log >/dev/null 2>&1
         kubectl delete pod -n $install_namespace $current_preloader_pod_name
         if [ "$?" != "0" ]; then
             echo -e "\n$(tput setaf 1)Error in deleting preloader pod.$(tput sgr 0)"
