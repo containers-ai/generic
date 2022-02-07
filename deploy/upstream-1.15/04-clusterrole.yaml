@@ -49,8 +49,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumes
-  - pods/log
   - replicationcontrollers
   - services
   verbs:
@@ -131,15 +129,12 @@ rules:
   - create
   - delete
   - get
-  - list
   - update
-  - watch
 - apiGroups:
   - apps
   - extensions
   resources:
   - daemonsets
-  - deployments/scale
   verbs:
   - create
   - delete
@@ -169,37 +164,12 @@ rules:
   verbs:
   - list
 - apiGroups:
-  - batch
-  resources:
-  - cronjobs
-  - jobs
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
   - extensions
   - policy
   resources:
   - podsecuritypolicies
   verbs:
-  - '*'
-- apiGroups:
-  - monitoring.coreos.com
-  resources:
-  - prometheuses
-  verbs:
-  - list
-- apiGroups:
-  - monitoring.coreos.com
-  resources:
-  - prometheusrules
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
+  - use
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -226,28 +196,7 @@ rules:
   resources:
   - securitycontextconstraints
   verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
   - use
-  - watch
-- apiGroups:
-  - storage.k8s.io
-  resources:
-  - storageclasses
-  verbs:
-  - list
-  - watch
-- apiGroups:
-  - volumesnapshot.external-storage.k8s.io
-  resources:
-  - volumesnapshotdatas
-  - volumesnapshots
-  verbs:
-  - list
-  - watch
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

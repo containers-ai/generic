@@ -164,7 +164,7 @@ check_if_pod_match_expected_version()
     namespace="$4"
 
     for ((i=0; i<$period; i+=$interval)); do
-        current_tag="$(kubectl get pod -n $namespace -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[*].image | grep "$pod_name" | head -1 |awk -F'/' '{print $NF}'|cut -d ':' -f2)"
+        current_tag="$(kubectl get pod -n $namespace -o custom-columns=NAME:.metadata.name,IMAGE:.spec.containers[*].image | grep "$pod_name" | awk '{print $2}'|tr "," "\n"|grep "$pod_name" |awk -F'/' '{print $NF}'|cut -d ':' -f2)"
         if [ "$current_tag" = "$tag_number" ]; then
             echo -e "\n$pod_name pod is present.\n"
             return 0
@@ -234,7 +234,6 @@ wait_until_single_pod_become_ready()
 # {
 #     echo "Checking Prometheus..."
 #     current_operator_pod_name="`kubectl get pods -n $install_namespace |grep "federatorai-operator-"|awk '{print $1}'|head -1`"
-#     kubectl exec $current_operator_pod_name -n $install_namespace -- /usr/bin/federatorai-operator prom_check > /dev/null 2>&1
 #     return_state="$?"
 #     echo "Return state = $return_state"
 #     if [ "$return_state" = "0" ];then
@@ -300,8 +299,17 @@ wait_until_cr_ready()
   local namespace="$3"
 
   for ((i=0; i<$period; i+=$interval)); do
-    # check if cr created
-    if [ "`kubectl get alamedaorganization default --no-headers -o custom-columns=Name:.metadata.name -n $namespace 2>/dev/null`" = "default" ]; then
+    # check if cr data is filled
+    pass="y"
+    tenancy_cluster="$(kubectl exec alameda-influxdb-0 -n $namespace -- influx -ssl -unsafeSsl -precision rfc3339 -username admin -password adminpass -database alameda_config -execute "select * from tenancy_cluster where global_config='true'"|tail -n+4)"
+    if [ "$tenancy_cluster" = "" ]; then
+        pass="n"
+    fi
+    tenancy_organization=$(kubectl exec alameda-influxdb-0 -n $namespace -- influx -ssl -unsafeSsl -precision rfc3339 -username admin -password adminpass -database alameda_config -execute "select * from tenancy_organization"|tail -n+4)
+    if [ "$tenancy_organization" = "" ]; then
+        pass="n"
+    fi
+    if [ "$pass" = "y" ]; then
         echo -e "\nThe default alamedaorganization under namespace $namespace is ready."
         return 0
     else
@@ -322,8 +330,7 @@ get_grafana_route()
         echo -e "\n========================================"
         echo "You can now access GUI through $(tput setaf 6)https://${link} $(tput sgr 0)"
         echo "The default login credential is $(tput setaf 6)admin/admin$(tput sgr 0)"
-        echo -e "\nAlso, you can start to apply alamedascaler CR for the target you would like to monitor."
-        echo "$(tput setaf 6)Review the administration guide for further details.$(tput sgr 0)"
+        echo -e "\n$(tput setaf 6)Review the administration guide for further details.$(tput sgr 0)"
         echo "========================================"
         else
             echo "Warning! Failed to obtain grafana route address."
@@ -333,8 +340,7 @@ get_grafana_route()
             echo -e "\n========================================"
             echo "You can now access GUI through $(tput setaf 6)https://<YOUR IP>:$dashboard_frontend_node_port $(tput sgr 0)"
             echo "The default login credential is $(tput setaf 6)admin/admin$(tput sgr 0)"
-            echo -e "\nAlso, you can start to apply alamedascaler CR for the target you would like to monitor."
-            echo "$(tput setaf 6)Review the administration guide for further details.$(tput sgr 0)"
+            echo -e "\n$(tput setaf 6)Review the administration guide for further details.$(tput sgr 0)"
             echo "========================================"
         fi
     fi
@@ -361,62 +367,6 @@ get_restapi_route()
             echo "The REST API online document can be found in $(tput setaf 6)https://<YOUR IP>:$rest_api_node_port/apis/v1/swagger/index.html $(tput sgr 0)"
             echo "========================================"
         fi
-    fi
-}
-
-setup_data_adapter_secret()
-{
-    secret_name="federatorai-data-adapter-secret"
-    secret_api_key="`kubectl get secret $secret_name -n $install_namespace -o jsonpath='{.data.datadog_api_key}'|base64 -d`"
-    secret_app_key="`kubectl get secret $secret_name -n $install_namespace -o jsonpath='{.data.datadog_application_key}'|base64 -d`"
-
-    modified="n"
-    if [ "$secret_api_key" = "" ] || [ "$secret_app_key" = "" ] || [ "$secret_api_key" = "dummy" ] || [ "$secret_app_key" = "dummy" ]; then
-        modified="y"
-        while [ "$input_api_key" = "" ] || [ "$input_app_key" = "" ]
-        do
-            read -r -p "$(tput setaf 2)Please enter Datadog API key: $(tput sgr 0)" input_api_key </dev/tty
-            input_api_key=`echo -n "$input_api_key" | base64`
-            read -r -p "$(tput setaf 2)Please enter Datadog Application key: $(tput sgr 0)" input_app_key </dev/tty
-            input_app_key=`echo -n "$input_app_key" | base64`
-        done
-    else
-        while [ "$reconfigure_action" != "y" ] && [ "$reconfigure_action" != "n" ]
-        do
-            default="n"
-            read -r -p "$(tput setaf 2)Do you want to reconfigure Datadog API & Application keys? [default: $default]: $(tput sgr 0)" reconfigure_action </dev/tty
-            reconfigure_action=${reconfigure_action:-$default}
-            reconfigure_action=$(echo "$reconfigure_action" | tr '[:upper:]' '[:lower:]')
-        done
-        if [ "$reconfigure_action" = "y" ]; then
-            modified="y"
-            while [ "$input_api_key" = "" ] || [ "$input_app_key" = "" ]
-            do
-                default="$secret_api_key"
-                read -r -p "$(tput setaf 2)Please enter Datadog API key [current: $default]: $(tput sgr 0)" input_api_key </dev/tty
-                input_api_key=${input_api_key:-$default}
-                input_api_key=`echo -n "$input_api_key" | base64`
-
-                default="$secret_app_key"
-                read -r -p "$(tput setaf 2)Please enter Datadog Application key [current: $default]: $(tput sgr 0)" input_app_key </dev/tty
-                input_app_key=${input_app_key:-$default}
-                input_app_key=`echo -n "$input_app_key" | base64`
-            done
-        fi
-    fi
-
-    if [ "$modified" = "y" ]; then
-        kubectl patch secret $secret_name -n $install_namespace --type merge --patch "{\"data\":{\"datadog_api_key\": \"$input_api_key\"}}"
-        if [ "$?" != "0" ]; then
-            echo -e "\n$(tput setaf 1)Error! Failed to update datadog API key in data adapter secret.$(tput sgr 0)"
-            exit 1
-        fi
-        kubectl patch secret $secret_name -n $install_namespace --type merge --patch "{\"data\":{\"datadog_application_key\": \"$input_app_key\"}}"
-        if [ "$?" != "0" ]; then
-            echo -e "\n$(tput setaf 1)Error! Failed to update datadog Application key in data adapter secret.$(tput sgr 0)"
-            exit 1
-        fi
-        restart_data_adapter_pod
     fi
 }
 
@@ -483,98 +433,6 @@ get_datadog_agent_info()
     dd_cluster_name="$(kubectl get deploy $dd_cluster_agent_deploy_name -n $dd_namespace -o jsonpath='{range .spec.template.spec.containers[*]}{.env[?(@.name=="DD_CLUSTER_NAME")].value}' 2>/dev/null | awk '{print $1}')"
 }
 
-display_cluster_scaler_file_location()
-{
-    echo -e "You can find $alamedascaler_cluster_filename template file inside $file_folder"
-}
-
-# get_cluster_name()
-# {
-#     cluster_name=`kubectl get cm cluster-info -n default -o yaml 2>/dev/null|grep uid|awk '{print $2}'`
-#     if [ "$cluster_name" = "" ];then
-#         cluster_name=`kubectl get cm cluster-info -n kube-public -o yaml 2>/dev/null|grep uid|awk '{print $2}'`
-#         if [ "$cluster_name" = "" ];then
-#             cluster_name=`kubectl get cm cluster-info -n kube-service-catalog’ -o yaml 2>/dev/null|grep uid|awk '{print $2}'`
-#         fi
-#     fi
-# }
-
-setup_cluster_alamedascaler()
-{
-    alamedascaler_cluster_filename="alamedascaler_federatorai.yaml"
-
-    cat > ${alamedascaler_cluster_filename} << __EOF__
-apiVersion: autoscaling.containers.ai/v1alpha2
-kind: AlamedaScaler
-metadata:
-  name: clusterscaler
-  namespace: ${install_namespace}
-spec:
-  clusterName: NeedToBeReplacedByClusterName
-__EOF__
-
-    # Get Datadog agent info (User configuration)
-    get_datadog_agent_info
-
-    if [ "$dd_cluster_agent_deploy_name" = "" ]; then
-        echo -e "\n$(tput setaf 1)Error! Failed to auto-discover Datadog cluster agent deployment.$(tput sgr 0)"
-        echo -e "\n$(tput setaf 1)Datadog cluster agent needs to be installed to make WPA/HPA work properly.$(tput sgr 0)"
-        display_cluster_scaler_file_location
-        return
-    fi
-
-    if [ "$dd_cluster_name" = "" ]; then
-        echo -e "\n$(tput setaf 1)Error! Failed to auto-discover DD_CLUSTER_NAME value in Datadog cluster agent env variable.$(tput sgr 0)"
-        echo -e "\n$(tput setaf 1)Please help to set up cluster name accordingly.$(tput sgr 0)"
-        display_cluster_scaler_file_location
-        return
-    else
-        kubectl describe alamedascaler --all-namespaces 2>/dev/null |grep "Cluster Name"|grep -q "$dd_cluster_name"
-        if [ "$?" = "0" ];then
-            # Found at least one alamedascaler. No need to apply alamedascaler for cluster
-            return
-        fi
-    fi
-
-    while [ "$monitor_cluster" != "y" ] && [ "$monitor_cluster" != "n" ]
-    do
-        default="y"
-        read -r -p "$(tput setaf 127)Do you want to monitor this cluster? [default: $default]: $(tput sgr 0)" monitor_cluster </dev/tty
-        monitor_cluster=${monitor_cluster:-$default}
-        monitor_cluster=$(echo "$monitor_cluster" | tr '[:upper:]' '[:lower:]')
-    done
-
-    if [ "$monitor_cluster" = "n" ]; then
-        display_cluster_scaler_file_location
-        return
-    fi
-
-    if [ "$dd_namespace" = "" ]; then
-        echo -e "\n$(tput setaf 1)Error! Can't find the datadog agent installed namespace.$(tput sgr 0)"
-        display_cluster_scaler_file_location
-        return
-    elif [ "$dd_api_key" = "" ]; then
-        echo -e "\n$(tput setaf 1)Error! Can't find the datadog agent API key. Please correctly configure the datadog agent API key.$(tput sgr 0)"
-        display_cluster_scaler_file_location
-        return
-    elif [ "$dd_app_key" = "" ]; then
-        echo -e "\n$(tput setaf 1)Error! Can't find the datadog agent APP key. Please correctly configure the datadog agent APP key.$(tput sgr 0)"
-        display_cluster_scaler_file_location
-        return
-    fi
-
-    echo -e "$(tput setaf 3)Use \"$dd_cluster_name\" as the cluster name and DD_CLUSTER_NAME$(tput sgr 0)"
-        sed -i "s|\bclusterName:.*|clusterName: ${dd_cluster_name}|g" $alamedascaler_cluster_filename
-
-    echo "Applying file $alamedascaler_cluster_filename ..."
-    kubectl apply -f $alamedascaler_cluster_filename
-    if [ "$?" != "0" ];then
-        echo -e "$(tput setaf 3)Warning!! Failed to apply $alamedascaler_cluster_filename $(tput sgr 0)"
-    fi
-    echo "Done"
-    display_cluster_scaler_file_location
-}
-
 download_cr_files()
 {
     cr_files=( "alamedadetection.yaml" "alamedanotificationchannel.yaml" "alamedanotificationtopic.yaml" )
@@ -582,26 +440,6 @@ download_cr_files()
     for file_name in "${cr_files[@]}"
     do
         cp $tgz_folder_name/deploy/example/$file_name .
-    done
-}
-
-download_alamedascaler_files()
-{
-    # Three kinds of alamedascaler
-    # In offline mode, alamedascaler files will be downloaded by federatorai-launcher.sh
-    alamedascaler_filename="alamedascaler.yaml"
-    src_pool=( "kafka" "nginx" "redis" )
-
-    for pool in "${src_pool[@]}"
-    do
-        cp $tgz_folder_name/deploy/example/$pool/$alamedascaler_filename .
-        if [ "$pool" = "kafka" ]; then
-            mv $alamedascaler_filename alamedascaler_kafka.yaml
-        elif [ "$pool" = "nginx" ]; then
-            mv $alamedascaler_filename alamedascaler_nginx.yaml
-        else
-            mv $alamedascaler_filename alamedascaler_generic.yaml
-        fi
     done
 }
 
@@ -789,6 +627,18 @@ if [ "$offline_mode_enabled" != "y" ]; then
     fi
 fi
 
+unameOut="$(uname -s)"
+case "${unameOut}" in
+    Linux*)
+        machine_type=Linux;;
+    Darwin*)
+        machine_type=Mac;;
+    *)
+        echo -e "\n$(tput setaf 1)Error! Unsupported machine type (${unameOut}).$(tput sgr 0)"
+        exit
+        ;;
+esac
+
 previous_alameda_namespace="`kubectl get alamedaservice --all-namespaces 2>/dev/null|tail -1|awk '{print $1}'`"
 previous_tag="`kubectl get alamedaservices -n $previous_alameda_namespace -o custom-columns=VERSION:.spec.version 2>/dev/null|grep -v VERSION|head -1`"
 previous_alamedaservice="`kubectl get alamedaservice -n $previous_alameda_namespace -o custom-columns=NAME:.metadata.name 2>/dev/null|grep -v NAME|head -1`"
@@ -841,7 +691,17 @@ if [ "$previous_alameda_namespace" != "" ];then
     fi
 fi
 
-script_located_path=$(dirname $(readlink -f "$0"))
+realpath() {
+    [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"
+}
+
+if [ "$machine_type" = "Linux" ]; then
+    script_located_path=$(dirname $(readlink -f "$0"))
+else
+    # Mac
+    script_located_path=$(dirname $(realpath "$0"))
+fi
+
 if [ "$FEDERATORAI_FILE_PATH" = "" ]; then
     # Try to find existing path
     if [[ $script_located_path =~ .*/federatorai/repo/.* ]]; then
@@ -965,7 +825,7 @@ if [ "$need_upgrade" = "y" ];then
 fi
 
 default_minimal_k8s_version_minor="16"
-k8s_version=$(kubectl version --short | grep -Po 'Server Version: v\K[0-9]+.[0-9]+')
+k8s_version=$(kubectl version --short |grep 'Server Version'|grep -oE 'v[0-9.]+'|sed 's/v//'|cut -d '.' -f1-2)
 k8s_version_major=$(echo $k8s_version | cut -d. -f1)
 k8s_version_minor=$(echo $k8s_version | cut -d. -f2)
 upstream_folder_name="upstream"
@@ -1016,11 +876,21 @@ fi
 
 # Modify federator.ai operator yaml(s)
 # for tag
-sed -i "s/:latest$/:${tag_number}/g" 03*.yaml
+if [ "$machine_type" = "Linux" ]; then
+    sed -i "s/:latest$/:${tag_number}/g" 03*.yaml
+else
+    # Mac
+    sed -i "" "s/:latest$/:${tag_number}/g" 03*.yaml
+fi
 
 # Specified alternative container image location
 if [ "${RELATED_IMAGE_URL_PREFIX}" != "" ]; then
-    sed -i -e "s%quay.io/fedaigeneric%${RELATED_IMAGE_URL_PREFIX}%g" 03*.yaml
+    if [ "$machine_type" = "Linux" ]; then
+        sed -i -e "s%quay.io/fedaigeneric%${RELATED_IMAGE_URL_PREFIX}%g" 03*.yaml
+    else
+        # Mac
+        sed -i "" -e "s%quay.io/fedaigeneric%${RELATED_IMAGE_URL_PREFIX}%g" 03*.yaml
+    fi
 fi
 
 # No need for recent build
@@ -1030,11 +900,22 @@ fi
 # fi
 
 # for namespace
-sed -i "s/name: federatorai/name: ${install_namespace}/g" 00*.yaml
-sed -i "s|\bnamespace:.*|namespace: ${install_namespace}|g" *.yaml
+if [ "$machine_type" = "Linux" ]; then
+    sed -i "s/name: federatorai/name: ${install_namespace}/g" 00*.yaml
+    sed -i "s|\bnamespace:.*|namespace: ${install_namespace}|g" *.yaml
+else
+    # Mac
+    sed -i "" "s/name: federatorai/name: ${install_namespace}/g" 00*.yaml
+    sed -i "" "s| namespace:.*| namespace: ${install_namespace}|g" *.yaml
+fi
 
 if [ "${ENABLE_RESOURCE_REQUIREMENT}" = "y" ]; then
-    sed -i -e "/image: /a\          resources:\n            limits:\n              cpu: 4000m\n              memory: 8000Mi\n            requests:\n              cpu: 100m\n              memory: 100Mi" `ls 03*.yaml`
+    if [ "$machine_type" = "Linux" ]; then
+        sed -i -e "/image: /a\          resources:\n            limits:\n              cpu: 4000m\n              memory: 8000Mi\n            requests:\n              cpu: 100m\n              memory: 100Mi" `ls 03*.yaml`
+    else
+        # Mac
+        sed -i "" -e "/image: /a\          resources:\n            limits:\n              cpu: 4000m\n              memory: 8000Mi\n            requests:\n              cpu: 100m\n              memory: 100Mi" `ls 03*.yaml`
+    fi
 fi
 
 if [ "$need_upgrade" = "y" ];then
@@ -1120,9 +1001,6 @@ if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
         cp $tgz_folder_name/deploy/example/$alamedaservice_example .
         download_cr_files
         echo "Done"
-        echo -e "\nDownloading Federator.ai alamedascaler sample files ..."
-        download_alamedascaler_files
-        echo "Done"
     else
         # Offline Mode
         # Copy CR yamls
@@ -1138,10 +1016,20 @@ if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
 
     # Specified alternative container image location
     if [ "${RELATED_IMAGE_URL_PREFIX}" != "" ]; then
-        sed -i "s|imageLocation:.*|imageLocation: ${RELATED_IMAGE_URL_PREFIX}|g" ${alamedaservice_example}
+        if [ "$machine_type" = "Linux" ]; then
+            sed -i "s|imageLocation:.*|imageLocation: ${RELATED_IMAGE_URL_PREFIX}|g" ${alamedaservice_example}
+        else
+            # Mac
+            sed -i "" "s|imageLocation:.*|imageLocation: ${RELATED_IMAGE_URL_PREFIX}|g" ${alamedaservice_example}
+        fi
     fi
     # Specified version tag
-    sed -i "s/version: latest/version: ${tag_number}/g" ${alamedaservice_example}
+    if [ "$machine_type" = "Linux" ]; then
+        sed -i "s/version: latest/version: ${tag_number}/g" ${alamedaservice_example}
+    else
+        # Mac
+        sed -i "" "s/version: latest/version: ${tag_number}/g" ${alamedaservice_example}
+    fi
 
     echo "========================================"
 
@@ -1243,7 +1131,12 @@ if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
 
     if [ "$need_upgrade" != "y" ]; then
         # First time installation case
-        sed -i "s|\bnamespace:.*|namespace: ${install_namespace}|g" ${alamedaservice_example}
+        if [ "$machine_type" = "Linux" ]; then
+            sed -i "s|\bnamespace:.*|namespace: ${install_namespace}|g" ${alamedaservice_example}
+        else
+            # Mac
+            sed -i "" "s| namespace:.*| namespace: ${install_namespace}|g" ${alamedaservice_example}
+        fi
 
         # if [ "$set_prometheus_rule_to" = "y" ]; then
         #     sed -i "s|\bprometheusService:.*|prometheusService: ${prometheus_address}|g" ${alamedaservice_example}
@@ -1253,7 +1146,12 @@ if [ "$ALAMEDASERVICE_FILE_PATH" = "" ]; then
         # fi
 
         if [[ "$storage_type" == "persistent" ]]; then
-            sed -i '/- usage:/,+10d' ${alamedaservice_example}
+            if [ "$machine_type" = "Linux" ]; then
+                sed -i '/- usage:/,+10d' ${alamedaservice_example}
+            else
+                # Mac
+                sed -i "" '/- usage:/,+10d' ${alamedaservice_example}
+            fi
             cat >> ${alamedaservice_example} << __EOF__
     - usage: log
       type: pvc
@@ -1374,6 +1272,18 @@ __EOF__
       class: ${storage_class}
       accessModes:
         - ReadWriteOnce
+  federatoraiPostgreSQL:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 500Mi
+    storages:
+    - usage: data
+      type: pvc
+      size: 10Gi
+      class: ${storage_class}
+      accessModes:
+        - ReadWriteOnce
 __EOF__
         elif [ "${ENABLE_RESOURCE_REQUIREMENT}" = "y" ] && [ "$storage_type" = "ephemeral" ]; then
             cat >> ${alamedaservice_example} << __EOF__
@@ -1398,6 +1308,11 @@ __EOF__
       requests:
         cpu: 500m
         memory: 500Mi
+  federatoraiPostgreSQL:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 500Mi
 __EOF__
         elif [ "${ENABLE_RESOURCE_REQUIREMENT}" != "y" ] && [ "$storage_type" = "persistent" ]; then
             cat >> ${alamedaservice_example} << __EOF__
@@ -1418,6 +1333,14 @@ __EOF__
       accessModes:
         - ReadWriteOnce
   fedemeterInfluxdb:
+    storages:
+    - usage: data
+      type: pvc
+      size: 10Gi
+      class: ${storage_class}
+      accessModes:
+        - ReadWriteOnce
+  federatoraiPostgreSQL:
     storages:
     - usage: data
       type: pvc
@@ -1468,17 +1391,6 @@ __EOF__
             exit 7
         fi
 
-        # Add sysdig entry inside secret if needed
-        sysdig_info=$(kubectl get secret federatorai-data-adapter-secret -n $install_namespace -o jsonpath='{.data.sysdig_api_token}')
-        if [ "$sysdig_info" == "" ]; then
-            sysdig_token=$(echo -n "dummy" | base64 )
-            kubectl patch secret federatorai-data-adapter-secret -n $install_namespace --type merge --patch "{\"data\":{\"sysdig_api_token\": \"$sysdig_token\"}}"
-            if [ "$?" != "0" ]; then
-                echo -e "\n$(tput setaf 1)Error! Failed to update sysdig dummy token in data adapter secret.$(tput sgr 0)"
-                exit 1
-            fi
-        fi
-
         # Specified alternative container imageLocation
         if [ "${RELATED_IMAGE_URL_PREFIX}" != "" ]; then
             kubectl patch alamedaservice $previous_alamedaservice -n $install_namespace --type merge --patch "{\"spec\":{\"imageLocation\": \"${RELATED_IMAGE_URL_PREFIX}\"}}"
@@ -1518,9 +1430,6 @@ else
     echo -e "\nDownloading Federator.ai CR sample files ..."
     download_cr_files
     echo "Done"
-    echo -e "\nDownloading Federator.ai alamedascaler sample files ..."
-    download_alamedascaler_files
-    echo "Done"
     kubectl apply -f $ALAMEDASERVICE_FILE_PATH >/dev/null
     if [ "$?" != "0" ]; then
         echo -e "\n$(tput setaf 1)Error! Failed to update alamedaservice file ($ALAMEDASERVICE_FILE_PATH).$(tput sgr 0)"
@@ -1548,13 +1457,11 @@ if [ "$webhook_exist" != "y" ];then
 fi
 
 ###Configure data source from GUI
-#setup_data_adapter_secret
 get_grafana_route $install_namespace
 get_restapi_route $install_namespace
 echo -e "$(tput setaf 6)\nInstall Federator.ai $tag_number successfully$(tput sgr 0)"
 check_previous_alamedascaler
 ###Configure data source from GUI
-#setup_cluster_alamedascaler
 check_alamedaservice
 leave_prog
 exit 0
